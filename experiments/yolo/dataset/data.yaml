@@ -1,0 +1,6 @@
+path: /mnt/d/Documents/Anemia Kuku/anemia-app/experiments/yolo/dataset
+train: images/train
+val: images/val
+names:
+  0: NAIL
+  1: SKIN

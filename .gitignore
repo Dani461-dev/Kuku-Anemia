@@ -1,0 +1,35 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# model / artifacts (dibangkitkan ulang dari data + core/)
+core/outputs/
+core/models/notebook_baseline/
+experiments/yolo/runs/
+experiments/yolo/verification/
+core/models/fullhand_model*.joblib
+core/models/fullhand_model_metadata.json
+
+# data sensitif / hasil runtime
+data/output/
+data/full_hand/*.jpg
+data/full_hand/*.jpeg
+data/full_hand/*.png
+data/full_hand_metadata.csv
+
+# environment
+.venv/
+venv/
+
+# YOLO dataset
+experiments/yolo/dataset/images/
+experiments/yolo/dataset/labels/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment
+.env
