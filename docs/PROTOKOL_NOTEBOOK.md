@@ -73,6 +73,43 @@ Baseline notebook diarsipkan ke `core/models/notebook_baseline/`.
 
 ---
 
+## 3b. Model RE-BASELINE = "seg runtime" (selaras dgn deteksi YOLO26-seg)
+
+Karena pipeline runtime kini memakai **YOLO26-seg mask + skin geometri + white auto**
+(lihat `core/seg_detector.py`), model Hb **dilatih ulang pada fitur persis jalur runtime**
+supaya distribusi fitur training ≡ distribusi fitur runtime (menghilangkan domain shift
+ekstraksi — tanpa perlu data lab baru).
+
+```bash
+# 1) Fitur MSU memakai jalur runtime (YOLO-seg di data/photo; metadata hanya ambil Hb lab)
+python3 core/build_features_seg.py --conf 0.15 --device 0 --white auto
+#    -> core/outputs/features_seg26_seg26_auto.csv
+
+# 2) Latih model selaras
+python3 core/train_hb.py --features core/outputs/features_seg26_seg26_auto.csv \
+    --no-balance --out-dir core/models/seg_runtime
+```
+
+| Aspek | Kanonik (GT box) | Re-baseline `seg_runtime` |
+|---|---|---|
+| Nail region | GT NAIL_2 box + mask heuristik | **YOLO26-seg mask** |
+| Skin region | GT SKIN_2 box | **skin geometri** (+2.3× lebar) |
+| White ref | `fixed` | **`auto`** |
+| Jari tengah | GT | median vertikal instance seg |
+| Nested CV MAE | 15.99 g/L (1.60 g/dL) | **15.96 g/L (1.60 g/dL)** |
+| Nested CV RMSE | 20.62 g/L | 20.67 g/L |
+| R² / Pearson | 0.40 / 0.633 | 0.40 / 0.633 |
+
+> Metadata aktif sekarang **lean** (`data/metadata.csv` = PATIENT_ID + date + Hb lab).
+> Box GT diarsipkan di `data/legacy_metadata_with_boxes.csv` → dipakai jalur GT
+> (eval/`build_dataset --boxes gt`) yang bukan kanonik lagi.
+
+Deploy: `core/inference.py::_model_paths()` otomatis memilih `core/models/seg_runtime`
+(jika ada) → fallback kanonik. Harness runtime `core/run_seg_pipeline.py` memakai
+`--white auto` agar konsisten dengan model ini.
+
+---
+
 ## 4. Eksperimen lain yang DIARSIPKAN
 
 | Eksperimen | Hasil | Status |

@@ -82,11 +82,24 @@ def _mask_for(crop: np.ndarray, use_mask: bool, mask_method: str) -> tuple[np.nd
     return m, frac
 
 
-def _region_features(img_rgb: np.ndarray, box, use_mask: bool, mask_method: str = "auto") -> tuple[dict[str, float], float, np.ndarray | None]:
+def _region_features(img_rgb: np.ndarray, box, use_mask: bool, mask_method: str = "auto",
+                     mask_override: np.ndarray | None = None) -> tuple[dict[str, float], float, np.ndarray | None]:
+    if mask_override is None:
+        crop = crop_from_box(img_rgb, box)
+        if crop.size == 0:
+            return {f: 0.0 for f in feature_names()}, 0.0, None
+        m, frac = _mask_for(crop, use_mask, mask_method)
+        return calculate_features(crop, mask=m), frac, m
+    # mask_override: full-frame binary (uint8/bool) mask aligned to img_rgb
     crop = crop_from_box(img_rgb, box)
     if crop.size == 0:
         return {f: 0.0 for f in feature_names()}, 0.0, None
-    m, frac = _mask_for(crop, use_mask, mask_method)
+    t, l, b, r = clip_box(box, *img_rgb.shape[:2])
+    m = mask_override[t:b, l:r]
+    m = (m > 0).astype(bool)
+    frac = float(m.mean()) if m.size else 0.0
+    if frac <= 0:
+        return {f: 0.0 for f in feature_names()}, 0.0, m
     return calculate_features(crop, mask=m), frac, m
 
 
@@ -107,11 +120,20 @@ def patient_features(
     mask_method: str = "auto",
     extended: bool = False,
     chart_detector: ChartDetector | None = None,
+    nail_mask: np.ndarray | None = None,
+    skin_mask: np.ndarray | None = None,
 ) -> dict:
-    """Raw normalized features (42) + optional extended + metadata for one finger."""
+    """Raw normalized features (42) + optional extended + metadata for one finger.
+
+    nail_mask/skin_mask: optional full-frame binary masks (uint8/bool, same HxW
+    as img_rgb) that override heuristic masking — e.g. masks from YOLO26-seg.
+    """
     wm = white_median_for(img_rgb, white_source, chart_detector)
-    nail_feats, mask_frac, nail_mask = _region_features(img_rgb, boxes.nail_box, use_mask, mask_method)
-    skin_feats, _, _ = _region_features(img_rgb, boxes.skin_box, use_mask=False)
+    nail_feats, mask_frac, nail_mask_out = _region_features(
+        img_rgb, boxes.nail_box, use_mask, mask_method, mask_override=nail_mask)
+    skin_feats, _, _ = _region_features(
+        img_rgb, boxes.skin_box, use_mask=False, mask_method=mask_method,
+        mask_override=skin_mask)
     raw = {f"NAIL_{k}": v for k, v in nail_feats.items()}
     raw.update({f"SKIN_{k}": v for k, v in skin_feats.items()})
     if extended:
@@ -119,7 +141,7 @@ def patient_features(
         skin_crop = crop_from_box(img_rgb, boxes.skin_box)
         nail_w = whiten_pixels(nail_crop, wm)
         skin_w = whiten_pixels(skin_crop, wm)
-        raw.update(extended_features(nail_w, wm, nail_mask, skin_w))
+        raw.update(extended_features(nail_w, wm, nail_mask_out, skin_w))
     norm = normalize_by_white(raw, wm)
     norm["_PATIENT_ID"] = 0
     norm["_MASK_COVERAGE"] = mask_frac

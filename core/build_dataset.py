@@ -76,7 +76,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=cfg.OUTPUTS_DIR / "features.csv")
     args = parser.parse_args()
 
-    metadata = pd.read_csv(cfg.PROJECT_ROOT / "data" / "metadata.csv")
+    metadata = pd.read_csv(cfg.PROJECT_ROOT / "data" / "legacy_metadata_with_boxes.csv")  # jalur GT (legacy)
     detector = make_detector(args.boxes)
     df = build(metadata, detector, cfg.PROJECT_ROOT / "data" / "photo",
                args.white, use_mask=not args.no_mask, mask_method=args.mask_method,

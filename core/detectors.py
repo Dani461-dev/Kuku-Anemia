@@ -168,10 +168,14 @@ def make_detector(name: str, **kwargs) -> NailSkinDetector:
     if name == "gt":
         import pandas as pd
 
-        meta = pd.read_csv(PROJECT_ROOT / "data" / "metadata.csv")
+        meta = pd.read_csv(PROJECT_ROOT / "data" / "legacy_metadata_with_boxes.csv")  # GT jari (legacy)
         return GTDetector(meta)
     if name == "yolo":
         return YOLODetector(**kwargs)
+    if name == "seg26":
+        from .seg_detector import Yolo26SegDetector
+
+        return Yolo26SegDetector(**kwargs)
     if name == "light":
         return LightDetector()
-    raise ValueError(f"unknown detector {name!r} (available: gt, yolo, light)")
+    raise ValueError(f"unknown detector {name!r} (available: gt, yolo, seg26, light)")

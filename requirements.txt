@@ -1,0 +1,22 @@
+# Anemia Kuku (Anevia) — requirements inti
+# Python 3.10+
+
+# Core pipeline (fitur/training/inference)
+numpy
+pandas
+scipy
+scikit-learn
+joblib
+opencv-python
+Pillow
+
+# Deteksi/segmentasi kuku (YOLO26-seg)
+ultralytics
+# torch — install dari index CUDA sesuai GPU, mis.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+
+# (opsional) jalur runtime MediaPipe lama — hanya jika memakai validate_mediapipe.py
+# mediapipe
+
+# (opsional) reposability / plot
+# matplotlib

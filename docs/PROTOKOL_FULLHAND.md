@@ -1,16 +1,17 @@
-# PROTOKOL FULL-HAND — Pengumpulan Dataset Runtime
+# PROTOKOL FULL-HAND — Pengumpulan Dataset & Retrain Model Hb (T3)
 
-Untuk menutup **gap domain** antara pelatihan (dataset MSU, tangan terpotong) dan
-runtime aplikasi (tangan penuh, background bebas), perlu dikumpulkan subset foto
-tangan penuh dengan Hb lab — dipakai untuk retrain/rekalibrasi model.
+Untuk menaikkan akurasi model Hb pada **runtime aplikasi** (foto tangan penuh), perlu
+dikumpulkan dataset **foto full-hand + Hb lab**. Sumber foto tidak lagi harus
+ber-box: region kuku/skin dideteksi otomatis oleh **YOLO26-seg**
+(`experiments/yolo26_seg`, mAP mask 0.965; metadata tetap **lean** — hanya id & Hb).
 
 ---
 
 ## Mengapa perlu?
 
-- Fitur model saat ini dilatih dari crop layout MSU (tangan 3 jari terpotong).
-- Di aplikasi, MediaPipe menghasilkan crop dengan **pose/ukuran/posisi berbeda** → ada risiko pergeseran fitur.
-- Data full-hand + Hb lab memungkinkan model belajar fitur yang **setara dengan runtime nyata**.
+- Model Hb `seg_runtime` dilatih dari foto **MSU 3-jari terpotong** (punya Hb lab).
+- Aplikasi runtime memotret **tangan penuh** → foto full-hand + lab membuat model
+  belajar fitur pada domain runtime sebenarnya → MAE turun di aplikasi.
 
 ---
 
@@ -18,54 +19,52 @@ tangan penuh dengan Hb lab — dipakai untuk retrain/rekalibrasi model.
 
 | Aspek | Standar |
 |---|---|
-| Jumlah subjek | Minimal 50, ideal 100 (makin banyak makin stabil) |
-| Hb lab | **Wajib**: ambil darah vena (standard lab) **sama hari** dengan pengambilan foto. |
-| Kartu warna | Cetak `core/chart_output/chart.png` (A4). Masukkan dalam frame setiap foto. |
-| Posisi foto | Tangan **terbuka penuh**, telapak ke atas atau netral; semua kuku terlihat. Pastikan **kartu warna** terlihat penuh. |
-| Pencahayaan | Hindari kilau langsung di kuku; cahaya sekitar merata. |
+| Jumlah subjek | Minimal **50**, ideal **100+** (makin banyak makin stabil) |
+| Hb lab | **Wajib**: darah vena / lab standar **di hari yang sama** dengan foto. |
+| Posisi foto | **Tangan penuh** terlihat jelas (5 jari + kuku tajam); 1 foto ↔ 1 subjek. |
+| Kartu warna | **Opsional** — pipeline memakai `white=auto` (deteksi putih) bila kartu tak ada; jika kartu dipakai, konsisten antar foto. |
+| Pencahayaan | Merata, tanpa kilau langsung di kuku (kuku tampak jelas). |
 | Kondisi kuku | Bersih (tanpa kutek/acrylic/plester). Jika ada, catat di metadata. |
-| Format foto | JPG/PNG, resolusi cukup (≥640×480). |
-| Banyak foto | 1 foto per subjek cukup untuk baseline; ideal: 2 (kiri+kanan) sebagai augmentasi. |
-| Split | Bagi pasien (bukan foto) menjadi train/val/test, hindari leakage. |
+| Format | JPG/PNG, ≥640×480; nama `{PATIENT_ID}.jpg`. |
+| Etika | Informed consent, anonim ID (tanpa wajah identitas), IRB jika perlu. |
 
 ---
 
-## Format metadata
+## Format metadata lean (`data/full_hand_metadata.csv`)
 
-Kolom (lihat template: `data/full_hand_template.csv`):
+Template: `data/full_hand_template.csv`
 
 | Kolom | Tipe | Keterangan |
 |---|---|---|
-| `PATIENT_ID` | int/str | ID unik, harus cocok dengan nama foto |
-| `Hb_LAB_GperL` | float | Hasil lab Hb dalam g/L (40–200) |
-| `NAIL_BOUNDING_BOXES` | JSON | `[[top,left,bottom,right], ...]` 3 jari — **opsional** (bisa diisi otomatis lalu QA) |
-| `SKIN_BOUNDING_BOXES` | JSON | `[[top,left,bottom,right], ...]` 3 jari — **opsional** |
-| `GENDER` | str | `female` atau `male` |
-| `PREGNANT` | bool/0-1 | `0/1` — threshold WHO berbeda untuk ibu hamil |
-| `MEASUREMENT_DATE` | str | Tanggal tes Hb |
+| `PATIENT_ID` | int | ID unik = nama file foto `{PATIENT_ID}.jpg` |
+| `Hb_LAB_GperL` | float | Hasil lab Hb (g/L), rentang 30–200. **Wajib** |
+| `GENDER` | str | `female` / `male` *(opsional)* |
+| `PREGNANT` | bool | `0/1` *(opsional — ambang WHO ibu hamil)* |
+| `MEASUREMENT_DATE` | str | Tanggal tes Hb *(opsional)* |
 | `N_IMAGE` | int | Banyak foto per subjek (default 1) |
 
-> Box opsional: jika dikosongkan, `core/train_fullhand.py` akan menjalankan MediaPipe
-> otomatis → box perlu **QA manual** sebelum training (inspeksi visual via
-> `core/validate_mediapipe.py`).
+> Tidak ada kolom bounding box — region dideteksi otomatis (YOLO-seg).
 
 ---
 
-## Alur kerja (setelah data ada)
+## Alur setelah data ada
 
 ```bash
-# 1) Taruh foto di data/full_hand/{PATIENT_ID}.jpg
-# 2) Isi metadata di data/full_hand_metadata.csv (copy dari template)
-
-# 3) Validasi deteksi + box + mask (opsional tapi disarankan):
-python3 core/validate_mediapipe.py \
-    --input-dir data/full_hand \
-    --out-csv data/output/fullhand_detection_check.csv
-
-# 4) Retrain model:
-python3 core/train_fullhand.py --features-csv <setelah build_dataset selesai>
-# (atau jalankan pipeline penuh yang otomatis: build + train)
+# 1) Foto  -> data/full_hand/{PID}.jpg
+# 2) Isi metadata lean -> data/full_hand_metadata.csv (copy dari template)
+# 3) Retrain model Hb (jalur YOLO-seg), membandingkan 2 strategi:
+#      A) full-hand saja   B) MSU + full-hand (gabung)
+python3 core/train_fullhand.py --conf 0.15 --device 0
 ```
+
+`train_fullhand.py` otomatis:
+- ekstraksi fitur runtime (YOLO-seg mask + skin geometri + `white=auto`),
+- nested CV untuk kedua strategi (A dan B),
+- menyimpan model CV-MAE terbaik → `core/models/fullhand_model.joblib` (+ metadata),
+- alternatif kombinasi ke `core/models/fullhand_msu_combined.joblib`.
+
+Deploy: gunakan model terbaik via env `ANEVIA_HB_MODEL_DIR` (atau salin ke
+`core/models/` dan biarkan `inference._model_paths()` memilih).
 
 ---
 
@@ -73,17 +72,14 @@ python3 core/train_fullhand.py --features-csv <setelah build_dataset selesai>
 
 | Metrik | Target |
 |---|---|
-| CV MAE (full-hand) | ≤ 1.8 g/dL (menurut gap terhadap MSU) |
-| Prediksi vs lab selisih individual | < 2 g/dL untuk mayoritas pasien |
-| Domain-shift flag (validate_mediapipe) | fitur dalam rentang training ≥ 80% |
-
-Bandingkan metrik MSU vs full-hand di laporan → bukti penutupan gap.
+| CV MAE (full-hand / gabung) | **Lebih kecil dari 15.96 g/L** = ada peningkatan vs `seg_runtime` |
+| MAE per pasien (individu) | < 20 g/L untuk mayoritas |
+| Bandingkan A vs B di laporan | bukti apakah data MSU membantu atau menghambat |
 
 ---
 
-## Keterbatasan etika
+## Keterbatasan etika & disclaimer
 
-- **Informed consent** wajib untuk pengambilan foto + data kesehatan.
-- Anonimisasi ID, tidak ada wajah identitas.
-- IRB jika diperlukan institusi/kompetisi.
-- Data hanya untuk riset/kompetisi, tidak untuk diagnosa klinis.
+- Informed consent wajib; anonim; data hanya untuk riset/kompetisi, bukan
+  diagnosa klinis.
+- Output tetap **AI-estimated Hb**, dikonfirmasi lewat tes klinis.

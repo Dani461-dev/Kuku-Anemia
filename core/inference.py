@@ -11,6 +11,7 @@ Output unit follows the Anevia API convention: g/dL (model is fit in g/L).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -23,10 +24,31 @@ from core.features import feature_names
 
 MODEL_PATH = cfg.MODELS_DIR / "elasticnet_model.joblib"
 META_PATH = cfg.MODELS_DIR / "model_metadata.json"
+SEG_RUNTIME_MODEL = cfg.MODELS_DIR / "seg_runtime" / "elasticnet_model.joblib"
+SEG_RUNTIME_META = cfg.MODELS_DIR / "seg_runtime" / "model_metadata.json"
+
+
+def _model_paths() -> tuple[Path, Path]:
+    """Resolve Hb model artifacts.
+
+    Priority:
+      1. env ANEVIA_HB_MODEL_DIR  (dir containing elasticnet_model.joblib)
+      2. segment-runtime aligned model (core/models/seg_runtime) if it exists
+      3. canonical model (core/models/)
+    """
+    env_dir = os.environ.get("ANEVIA_HB_MODEL_DIR")
+    if env_dir:
+        d = Path(env_dir)
+        return d / "elasticnet_model.joblib", d / "model_metadata.json"
+    if SEG_RUNTIME_MODEL.exists():
+        return SEG_RUNTIME_MODEL, SEG_RUNTIME_META
+    return MODEL_PATH, META_PATH
 
 
 class NailHbModel:
-    def __init__(self, model_path: Path = MODEL_PATH, meta_path: Path = META_PATH):
+    def __init__(self, model_path: Path | None = None, meta_path: Path | None = None):
+        if model_path is None or meta_path is None:
+            model_path, meta_path = _model_paths()
         import joblib
 
         self.model = joblib.load(model_path)
@@ -41,6 +63,18 @@ class NailHbModel:
         vector = np.array([feats.get(c, 0.0) for c in self.feature_order], dtype=float)
         return vector.reshape(1, -1)
 
+    def features_for_masks(self, img_rgb: np.ndarray, boxes: DetectedFinger,
+                           nail_mask: np.ndarray | None = None,
+                           skin_mask: np.ndarray | None = None,
+                           white_source: str = "fixed") -> np.ndarray:
+        """Feature vector where nail/skin pixels come from seg masks (full-frame)."""
+        feats = patient_features(img_rgb, boxes, white_source=white_source,
+                                 use_mask=True, nail_mask=nail_mask,
+                                 skin_mask=skin_mask)
+        feats = {k: v for k, v in feats.items() if not k.startswith("_")}
+        vector = np.array([feats.get(c, 0.0) for c in self.feature_order], dtype=float)
+        return vector.reshape(1, -1)
+
     def predict(self, img_rgb: np.ndarray, boxes: DetectedFinger,
                 gender: str = "female", white_source: str = "fixed", use_mask: bool = True) -> dict:
         """Predict Hb (g/dL) + WHO category. gender: 'male'/'female'.
@@ -51,13 +85,27 @@ class NailHbModel:
         X = self.features_for(img_rgb, boxes, white_source=white_source, use_mask=use_mask)
         hb_gperL = float(self.model.predict(X)[0])
         hb_g_dl = hb_gperL / 10.0
+        return self._wrap_result(hb_g_dl, hb_gperL, gender)
+
+    def predict_masks(self, img_rgb: np.ndarray, boxes: DetectedFinger,
+                      nail_mask: np.ndarray | None = None,
+                      skin_mask: np.ndarray | None = None,
+                      gender: str = "female", white_source: str = "fixed") -> dict:
+        """Predict Hb using seg masks for nail/skin pixels."""
+        X = self.features_for_masks(img_rgb, boxes, nail_mask=nail_mask,
+                                    skin_mask=skin_mask, white_source=white_source)
+        hb_gperL = float(self.model.predict(X)[0])
+        hb_g_dl = hb_gperL / 10.0
+        return self._wrap_result(hb_g_dl, hb_gperL, gender)
+
+    def _wrap_result(self, hb_g_dl: float, hb_gperL: float, gender: str) -> dict:
+        female_like = gender not in ("male", "pria", "laki-laki", "laki", "m", "man")
         return {
             "estimated_hb_g_dl": round(hb_g_dl, 2),
             "estimated_hb_gperL": round(hb_gperL, 1),
             "gender": gender,
             "category": categorize_hb(hb_g_dl, gender),
-            "threshold_g_dl": self.meta["who_threshold_female_g_dl"]
-            if gender not in ("male", "pria", "laki-laki", "laki", "m", "man")
+            "threshold_g_dl": self.meta["who_threshold_female_g_dl"] if female_like
             else self.meta["who_threshold_male_g_dl"],
             "model": self.meta.get("model", "RobustScaler + ElasticNet"),
             "cv_mae_g_dl": self.meta.get("cv_mae_g_dl"),

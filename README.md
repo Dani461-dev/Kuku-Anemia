@@ -25,7 +25,7 @@ pengambilan fitur foto → CSV yang dibangun sendiri.
 ## Alur Pipeline
 
 ```text
-data/photo/*.jpg  +  data/metadata.csv (NAIL_2/SKIN_2 boxes, Hb lab g/L)
+data/photo/*.jpg  +  data/metadata.csv (Hb lab g/L, tanpa box — region dari YOLO-seg)
       │
       ▼
 core/build_dataset.py          │ 1. crop ingin (box jari tengah)
@@ -75,8 +75,10 @@ anemia-app/
 │   ├── assets/             #   model MediaPipe (.task)
 │   └── chart_output/       #   kartu warna keluaran
 ├── data/
-│   ├── metadata.csv        #   dari GitHub (Hb lab g/L + box)
-│   ├── photo/              #   250 foto kuku dari GitHub
+│   ├── metadata.csv        #   LEAN: PATIENT_ID + MEASUREMENT_DATE + Hb lab (tanpa box)
+│   ├── legacy_metadata_with_boxes.csv  #   arsip metadata ber-box (untuk evaluasi GT) 
+│   ├── photo/              #   250 foto kuku (1 foto ↔ 1 baris metadata)
+│   ├── photo_unlabelled/   #   foto tanpa Hb lab (mis. 185.jpg), tidak dipakai
 │   ├── full_hand/          #   foto tangan penuh user (untuk uji runtime & T3)
 │   ├── full_hand_template.csv  # template metadata dataset full-hand (T3)
 │   └── output/             #   hasil validasi (predictions.csv)
@@ -116,13 +118,13 @@ python3 core/train_hb.py --protocol notebook \
     --features core/outputs/features_gt_fixed_nomask.csv \
     --out-dir core/models/notebook_baseline
 
-# 3) Prediksi (smoke test)
+# 3) Prediksi (smoke test) — jalur GT legacy (box dari arsip; kanonik runtime = seg26)
 python3 -c "
 import pandas as pd
 from core.inference import predict_hb
 from core.detectors import GTDetector
 from core.pipeline import select_middle_finger
-meta = pd.read_csv('data/metadata.csv')
+meta = pd.read_csv('data/legacy_metadata_with_boxes.csv')
 det = GTDetector(meta)
 pid = 14
 mid = select_middle_finger(det.detect_for_patient(pid))
@@ -146,6 +148,32 @@ foto tangan penuh (background bebas)
    → model → estimasi Hb g/dL → kategori WHO
 ```
 
+**Jalur runtime alternatif — YOLO26-seg (tracking + masking per-pixel):**
+
+1. Latih model: `python3 experiments/yolo26_seg/train_seg26.py --epochs 60`
+2. Jalankan harness: `python3 core/run_seg_pipeline.py --input-dir data/full_hand --device 0`
+3. Overlay + ringkasan CSV → `core/outputs/viz_seg/` & `data/output/seg_predictions.csv`
+
+```
+foto → YOLO26-seg (mask per-pixel per kuku)
+   → box NAIL (dari mask) + box SKIN (geometri: geser +2.3× lebar, konsisten layout MSU)
+   → pilih jari tengah (median vertikal)
+   → mask kuku → 42 fitur persentil ternormalisasi (white=auto)
+   → model selaras (core/models/seg_runtime) → estimasi Hb g/dL → kategori WHO
+```
+
+Model Hb **selaras runtime** (`core/models/seg_runtime`, dibangun `core/build_features_seg.py`)
+dipakai otomatis oleh pipeline seg26 — fitur training ≡ fitur runtime.
+Deteksi bisa dipilih: `make_detector("seg26")` (mask+box), `"yolo"`, `"mediapipe"`, `"light"`.
+Bobot seg26 override: env `ANEVIA_SEG26_WEIGHTS` (default: `experiments/yolo26_seg/runs/seg26/weights/best.pt`).
+Override model Hb: env `ANEVIA_HB_MODEL_DIR`.
+
+**Guard kewajaran** (`core/guard.py`): tiap prediksi diperiksa — ada kuku,
+mask coverage box 5–99%, ≥70% fitur dalam rentang training, Hb ∈ 4–18 g/dL.
+Gagal guard → `FLAGS_OK=0` + alasan di `ISSUES`, Hb tidak dikeluarkan (arahkan
+"ulangi foto"). White-source dikunci dari metadata model (default `auto`); jika CLI
+menyimpang akan ada warning.
+
 **Validasi jalur runtime (T1/T2):**
 
 ```bash
@@ -162,10 +190,18 @@ python3 core/visualize.py --mode mediapipe
 fitur dalam rentang training ≥ 80%. `FLAGS_OK=1` = semua lolos.
 
 **Retrain pada dataset full-hand (T3)** — lihat `docs/PROTOKOL_FULLHAND.md`:
+- Metadata lean (`data/full_hand_template.csv`), **tanpa box** — region dari YOLO26-seg.
+- `core/train_fullhand.py` membandingkan 2 strategi & menyimpan terbaik:
+  A) full-hand saja · B) MSU + full-hand (gabung).
 
 ```bash
-python3 core/train_fullhand.py
+python3 core/train_fullhand.py --conf 0.15 --device 0
 ```
+
+**Eksperimen model lain (selain ElasticNet)** — `experiments/hb_models/benchmark_seg.py`
+pada fitur seg-runtime: coba RF/ET/GBR/HistGB/SVR/KNN/MLP/XGB/LightGBM/Stacking.
+Hasil: **ElasticNet (15.91 g/L) tetap terbaik**; semua non-linear/jar-jauh ≥16.2 g/L.
+→ baseline dipertahankan (data, bukan model, yang menjadi pembatas akurasi).
 
 ---
 
@@ -173,6 +209,7 @@ python3 core/train_fullhand.py
 
 | Model | Protokol | Metrik |
 |---|---|---|
+| **`core/models/seg_runtime/` (RE-BASELINE)** | **selaras runtime** — fitur YOLO26-seg mask + skin geometri + white auto (250 pasien, nested CV) | **MAE 15.96 g/L (1.60 g/dL)** · RMSE 20.67 · R² 0.40 — dipakai otomatis oleh pipeline seg26 |
 | **`core/models/elasticnet_model.joblib` (KANONIK)** | **improved** (masked, semua 250 pasien, nested CV) | **MAE 15.99 g/L (1.60 g/dL)** · RMSE 20.62 g/L · R² 0.40 |
 | `core/models/notebook_baseline/` | reproduksi notebook asli (nomask, balanced-100, GridSearchCV) | alpha 0.2057, l1 0.9 · test RMSE 20.26 g/L · bias test −4.3, LoA (−43, +34) g/L |
 | `core/models/improved_all250/` | duplikat kanonik (cadangan) | MAE 1.60 g/dL · RMSE 2.06 g/dL · R² 0.40 |
@@ -185,14 +222,20 @@ pria <13.0 g/dL.
 ## Catatan Penting / Keterbatasan
 
 1. **MediaPipe tidak mendeteksi tangan di foto dataset** (tangan 3 jari masuk dari
-   tepi kanan, tanpa telapak lengkap → gagal). Karena itu box `metadata.csv`
-   (ground truth dataset) dipakai untuk latih. MediaPipe tetap berguna untuk foto
-   asli pengguna (tangan penuh).
+   tepi kanan, tanpa telapak lengkap → gagal). Kanonik runtime kini **YOLO26-seg**
+   (deteksi+mask, dilatih pada foto full-hand V2). Box GT di
+   `data/legacy_metadata_with_boxes.csv` hanya untuk evaluasi/reproduksi.
 2. **YOLO belum dilatih** — hanya ada sanity run 1 epoch. Lihat
    `experiments/yolo/train.py`.
 3. **Fitur HSV/LAB + kontras (74 fitur) MERUGIKAN akurasi** di uji empiris
    (CV RMSE 38.9 vs 23.4) → diarsipkan di `models/legacy_74features/`.
-4. **Hasil adalah estimasi AI**, bukan pengukuran lab; interpretasi medis wajib
+4. **Batas akurasi = jumlah data, bukan pilihan model.** Eksperimen benchmark
+   (`experiments/hb_models/benchmark.py`, hasil di `core/outputs/experiment_results.csv`):
+   model non-linear (RF/GBR/SVR/Huber), tuning grid-lebar, ensembel, target-transform,
+   bagging KDE, dan augmentasi fitur SEMUANYA tidak melampaui ElasticNet secara berarti
+   (semua beda ≤ ~0.03 g/dL → tingkat noise). Jalan naik akurasi = dataset lebih banyak /
+   full-hand (T3).
+5. **Hasil adalah estimasi AI**, bukan pengukuran lab; interpretasi medis wajib
    ditegaskan lewat tes klinis.
 
 Detail verifikasi kesesuaian dengan notebook asli: lihat
