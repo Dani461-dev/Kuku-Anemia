@@ -42,6 +42,8 @@ def main() -> None:
                         help="override data.yaml (e.g. a quick local subset)")
     parser.add_argument("--quick", action="store_true", help="1-epoch sanity run")
     parser.add_argument("--patience", type=int, default=30, help="early stopping")
+    parser.add_argument("--scale", type=float, default=0.9,
+                        help="augmentasi skala (fraksi acak objek per batch); >0.5 mengajarkan objek kecil/global")
     args = parser.parse_args()
 
     data_yaml = args.data or DATASET / "data.yaml"
@@ -62,6 +64,7 @@ def main() -> None:
         device=args.device,
         workers=args.workers,
         patience=args.patience,
+        scale=args.scale,
         project=str(Path(__file__).parent / "runs"),
         name="seg26",
         seed=42,

@@ -133,7 +133,11 @@ def main() -> None:
     parser.add_argument("--weights", type=str, default=None,
                         help="override seg26 weights path")
     parser.add_argument("--conf", type=float, default=0.30,
-                        help="detection confidence threshold")
+                        help="detection confidence threshold (pass utama, skala training)")
+    parser.add_argument("--imgsz", type=int, default=640,
+                        help="YOLO input size pass utama (default 640 = skala training)")
+    parser.add_argument("--no-fallback", action="store_true",
+                        help="nonaktifkan dua-pass (fallback conf 0.10 @ imgsz 1280 utk foto susah)")
     parser.add_argument("--limit", type=int, default=0, help="limit number of photos")
     parser.add_argument("--device", type=str, default="cpu")
     args = parser.parse_args()
@@ -154,7 +158,8 @@ def main() -> None:
     print(f"seg26 device: {args.device}")
 
     detector = Yolo26SegDetector(weights=args.weights, device=args.device,
-                                 conf=args.conf)
+                                 conf=args.conf, imgsz=args.imgsz,
+                                 fallback=not args.no_fallback)
     model = NailHbModel()
 
     # white-source lock: prefer explicit CLI, else the model's training source

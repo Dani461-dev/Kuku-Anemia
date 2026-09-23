@@ -19,6 +19,7 @@ import numpy as np
 from core import config as cfg
 from core.categorize import categorize_hb
 from core.detectors import DetectedFinger
+from core.personalize import Personalizer
 from core.pipeline import load_rgb, patient_features
 from core.features import feature_names
 
@@ -46,7 +47,9 @@ def _model_paths() -> tuple[Path, Path]:
 
 
 class NailHbModel:
-    def __init__(self, model_path: Path | None = None, meta_path: Path | None = None):
+    def __init__(self, model_path: Path | None = None, meta_path: Path | None = None,
+                 personalizer: Personalizer | None = None,
+                 profile_path: Path | None = None):
         if model_path is None or meta_path is None:
             model_path, meta_path = _model_paths()
         import joblib
@@ -54,6 +57,14 @@ class NailHbModel:
         self.model = joblib.load(model_path)
         self.meta = json.loads(Path(meta_path).read_text())
         self.feature_order = self.meta["feature_order"]
+        # personalisasi per-user (opsional): eksplisit > file > kosong
+        if personalizer is not None:
+            self.personalizer = personalizer
+        elif profile_path is not None and Path(profile_path).exists():
+            self.personalizer = Personalizer.load(profile_path)
+        else:
+            self.personalizer = Personalizer()
+        self._last_raw_g_dl: float | None = None
 
     def features_for(self, img_rgb: np.ndarray, boxes: DetectedFinger,
                      white_source: str = "fixed", use_mask: bool = True) -> np.ndarray:
@@ -84,8 +95,8 @@ class NailHbModel:
         """
         X = self.features_for(img_rgb, boxes, white_source=white_source, use_mask=use_mask)
         hb_gperL = float(self.model.predict(X)[0])
-        hb_g_dl = hb_gperL / 10.0
-        return self._wrap_result(hb_g_dl, hb_gperL, gender)
+        raw_g_dl = hb_gperL / 10.0
+        return self._finish(raw_g_dl, gender)
 
     def predict_masks(self, img_rgb: np.ndarray, boxes: DetectedFinger,
                       nail_mask: np.ndarray | None = None,
@@ -95,8 +106,32 @@ class NailHbModel:
         X = self.features_for_masks(img_rgb, boxes, nail_mask=nail_mask,
                                     skin_mask=skin_mask, white_source=white_source)
         hb_gperL = float(self.model.predict(X)[0])
-        hb_g_dl = hb_gperL / 10.0
-        return self._wrap_result(hb_g_dl, hb_gperL, gender)
+        raw_g_dl = hb_gperL / 10.0
+        return self._finish(raw_g_dl, gender)
+
+    def _finish(self, raw_g_dl: float, gender: str) -> dict:
+        """Terapkan personalisasi per-user (jika ada) + bungkus hasil (g/dL)."""
+        self._last_raw_g_dl = raw_g_dl
+        hb_g_dl = self.personalizer.apply(raw_g_dl)
+        wrapped = self._wrap_result(hb_g_dl, hb_g_dl * 10.0, gender)
+        wrapped["raw_hb_g_dl"] = round(raw_g_dl, 2)
+        wrapped["personalized"] = self.personalizer.is_calibrated
+        wrapped["calibration_points"] = self.personalizer.n_points
+        return wrapped
+
+    def calibrate(self, actual_g_dl: float, raw_g_dl: float | None = None) -> dict:
+        """Ajarkan nilai Hb lab (CBC) untuk personalisasi per-user.
+
+        - actual_g_dl : hasil lab yang diketahui pengguna (g/dL).
+        - raw_g_dl    : prediksi aplikasi yang TIDAK dipersonalisasi saat lab
+                        diambil; defaultnya prediksi mentah terakhir.
+        """
+        raw = raw_g_dl if raw_g_dl is not None else self._last_raw_g_dl
+        if raw is None:
+            raise ValueError("Belum ada prediksi mentah: lakukan predict() dulu "
+                             "atau berikan raw_g_dl secara eksplisit.")
+        self.personalizer.add(raw, actual_g_dl)
+        return self.personalizer.to_dict()
 
     def _wrap_result(self, hb_g_dl: float, hb_gperL: float, gender: str) -> dict:
         female_like = gender not in ("male", "pria", "laki-laki", "laki", "m", "man")

@@ -1,0 +1,8 @@
+path: D:/Documents/Anemia Kuku/anemia-app/experiments/yolo26_seg
+train:
+  - dataset/images/train
+  - dataset_app/images/train
+val:
+  - dataset/images/val
+names:
+  0: nail

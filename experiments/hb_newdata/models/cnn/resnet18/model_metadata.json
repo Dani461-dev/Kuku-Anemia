@@ -1,0 +1,22 @@
+{
+  "model": "CNN resnet18 (ImageNet pretrained) -> Hb regresi",
+  "crops_csv": "D:\\Documents\\Anemia Kuku\\anemia-app\\experiments\\hb_newdata\\outputs\\crops.csv",
+  "n_images": 11563,
+  "n_train": 9251,
+  "n_val": 1156,
+  "n_test": 1156,
+  "epochs_done": 17,
+  "patience": 3,
+  "best_val_mae_gperL": 14.354773293729473,
+  "best_val_mae_g_dl": 1.435,
+  "test_mae_gperL": 14.44604789839484,
+  "test_mae_g_dl": 1.445,
+  "test_rmse_gperL": 19.112881187730636,
+  "test_r2": 0.2858642823665014,
+  "test_pearson": 0.540711973862421,
+  "target_unit": "g/L",
+  "split": "per patient (uuid) 80/10/10, seed=42",
+  "loss": "SmoothL1",
+  "optimizer": "AdamW",
+  "lr": 0.0001
+}

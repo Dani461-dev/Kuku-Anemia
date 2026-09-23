@@ -105,7 +105,11 @@ class Yolo26SegDetector:
 
     def __init__(self, weights: str | Path | None = None, conf: float = 0.30,
                  iou: float = 0.5, device: str = "cpu",
-                 skin_off_x: float = 2.3, skin_method: str = "layout"):
+                 skin_off_x: float = 2.3, skin_method: str = "layout",
+                 imgsz: int | None = 640, fallback: bool = False,
+                 fallback_conf: float = 0.10, fallback_imgsz: int = 1280,
+                 min_nails: int = 3, max_nails: int = 5,
+                 min_fallback_conf: float = 0.25):
         from ultralytics import YOLO
 
         weights = Path(weights) if weights else _default_weights()
@@ -118,27 +122,60 @@ class Yolo26SegDetector:
         self.iou = iou
         self.skin_off_x = skin_off_x
         self.skin_method = skin_method
+        self.imgsz = imgsz or 640          # pass utama = skala training (640)
+        # dua-pass (aktif di runtime app via run_seg_pipeline):
+        # pass utama conf 0.30@640 -> jika <3 kuku, ulang conf 0.10@1280
+        # + dedupe + min-conf 0.25 + cap 5. Offline/eval: fallback=False
+        # supaya perilaku threshold eksplisit tetap reproducible.
+        self.fallback = fallback
+        self.fallback_conf = fallback_conf
+        self.fallback_imgsz = fallback_imgsz
+        self.min_nails = min_nails
+        self.max_nails = max_nails
+        self.min_fallback_conf = min_fallback_conf
         self._model = YOLO(str(weights))
         self._device = device
 
-    def detect(self, img_rgb: np.ndarray) -> SegResult:
-        """Returns nail instances (box + full-frame mask) for one RGB image."""
+    @staticmethod
+    def _box_iou(a: list[int], b: list[int]) -> float:
+        """IoU dua box format [t, l, b, r]."""
+        it = max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+        ua = ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - it)
+        return it / ua if ua > 0 else 0.0
+
+    @staticmethod
+    def _dedupe(instances: list, min_conf: float = 0.0) -> list:
+        """Simpan deteksi terkuat; buang duplikat (IoU>0.5) & conf di bawah min_conf.
+
+        Pada conf rendah (fallback) mask yang sama bisa terbelah jadi 2-3 instans
+        (conf ~0.13-0.18) -> inilah sumber 'kuku 6 padahal 5'.
+        """
+        keep: list = []
+        for inst in sorted(instances, key=lambda i: i.confidence, reverse=True):
+            if inst.confidence < min_conf:
+                continue
+            if any(Yolo26SegDetector._box_iou(inst.nail_box, k.nail_box) > 0.5
+                   for k in keep):
+                continue
+            keep.append(inst)
+        return keep
+
+    def _predict(self, img_rgb: np.ndarray, conf: float, imgsz: int):
         results = self._model.predict(
-            img_rgb, conf=self.conf, iou=self.iou, verbose=False,
-            device=self._device, retina_masks=True,
+            img_rgb, conf=conf, iou=self.iou, verbose=False,
+            device=self._device, retina_masks=True, imgsz=imgsz,
         )
         res = results[0]
-        h, w = img_rgb.shape[:2]
-        out = SegResult(img_h=h, img_w=w)
         if res.masks is None:
-            return out
-        masks = res.masks.data  # (N, H, W) 0/1 (retina_masks -> original size)
+            return []
+        h, w = img_rgb.shape[:2]
+        masks = res.masks.data
         if masks is None:
-            return out
+            return []
         masks = masks.cpu().numpy() if hasattr(masks, "cpu") else np.asarray(masks)
         boxes = res.boxes.xyxy.cpu().numpy() if hasattr(res.boxes.xyxy, "cpu") else np.asarray(res.boxes.xyxy)
         confs = res.boxes.conf.cpu().numpy() if hasattr(res.boxes.conf, "cpu") else np.asarray(res.boxes.conf)
-
+        out = []
         for i in range(masks.shape[0]):
             m = masks[i]
             if m.shape[:2] != (h, w):      # safety: resize to frame if needed
@@ -148,10 +185,27 @@ class Yolo26SegDetector:
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
             m_bin = (m > 0).astype(np.uint8)
-            out.instances.append(NailInstance(
+            out.append(NailInstance(
                 nail_box=[y1, x1, y2, x2], mask=m_bin,
                 confidence=float(confs[i]), finger_id=i))
         return out
+
+    def detect(self, img_rgb: np.ndarray) -> SegResult:
+        """Returns nail instances (box + full-frame mask) for one RGB image."""
+        h, w = img_rgb.shape[:2]
+        insts = self._dedupe(self._predict(img_rgb, self.conf, self.imgsz))
+        # fallback: foto susah (resolusi rendah / framing global) sering gagal
+        # di pass utama -> ulangi dengan conf rendah + input lebih besar.
+        if (self.fallback and len(insts) < self.min_nails
+                and (self.fallback_conf != self.conf
+                     or self.fallback_imgsz != self.imgsz)):
+            alt = self._dedupe(
+                self._predict(img_rgb, self.fallback_conf, self.fallback_imgsz),
+                min_conf=self.min_fallback_conf)
+            if len(alt) > len(insts):
+                insts = alt
+        insts = insts[: self.max_nails]
+        return SegResult(instances=insts, img_h=h, img_w=w)
 
     def detect_boxes(self, img_rgb: np.ndarray) -> list[DetectedFinger]:
         """Compatibility with the NailSkinDetector contract (boxes only)."""

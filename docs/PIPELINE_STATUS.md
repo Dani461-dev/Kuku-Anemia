@@ -83,10 +83,27 @@ Artinya model **sudah dilatih pada foto tangan penuh** yang setara runtime aplik
 4. (Opsional) Ensemble prediksi 3 jari — sudah diuji, TIDAK membantu (14.93 vs
    16.96 g/L rata2-jari).
 
+## Fine-tune seg26 ke domain foto aplikasi (proses aktif)
+
+- **Masalah**: seg26 dilatih hanya dgn `archive (12)/NailSegmentationDatasetV2`
+  (kuku dekat); di foto app (tangan penuh + bg bebas) confidence turun
+  (0.30–0.75 vs 0.7–0.9 di domain asli) walau deteksi 5/5/5.
+- **F1 — pseudo-label**: `experiments/yolo26_seg/prepare_domain_labels.py`
+  (jalankan per batch foto baru di `data/full_hand/`):
+  seg26 dua-pass → mask conf ≥0.30 → QA otomatis (≥4 kuku, box ≥12px,
+  fill 30–95%, non-overlap) → poligon YOLO-seg di `dataset_app/`
+  + `data_app.yaml` (V2 + app).
+- **F2 — fine-tune**: `train_seg26.py --model runs/seg26/weights/best.pt
+  --data data_app.yaml --epochs 30 --imgsz 640 --device 0 --scale 0.9`.
+- **F3 — gate**: `core/eval_gate_seg26.py --new runs/seg26{2}/weights/best.pt`
+  (V2 Dice ≥ 0.80 & tidak turun >0.02 · app 5/5 & mean conf naik · MSU tidak
+  regresi). Lolos → swap weights runtime; gagal → pertahankan dua-pass.
+
 ## Keterbatasan / disclaimer
 
 - Hasil Hb adalah **estimasi AI**, bukan pengukuran lab; interpretasi medis wajib
   dikonfirmasi lewat tes klinis.
-- Konfigurasi runtime aman: `Yolo26SegDetector(conf≈0.15)`, `white=auto`,
+- Konfigurasi runtime aman: `Yolo26SegDetector(conf=0.30, imgsz=640, fallback=True
+  -> conf 0.10 @ imgsz 1280 + dedupe utk foto susah)`, `white=auto`,
   model `seg_runtime`. Keyakinan tinggi pada tracking+masking (full-hand trained);
   keyakinan sedang pada nilai Hb (belum ada ground-truth full-hand).

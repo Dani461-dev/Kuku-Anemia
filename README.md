@@ -189,6 +189,13 @@ python3 core/visualize.py --mode mediapipe
 **Flag kewajaran (T2)**: Hb ∈ 4–18 g/dL · mask coverage 15–99% · confidence hand ≥ 0.5 ·
 fitur dalam rentang training ≥ 80%. `FLAGS_OK=1` = semua lolos.
 
+**Konfigurasi deteksi runtime (seg26, dua-pass)**: pass utama `conf=0.30` @ `imgsz 640`
+(skala training — di foto resolusi tinggi memberi 5 kuku bersih conf 0.34–0.79). Jika
+< 3 kuku (foto kecil/compressed/framing global): fallback `conf=0.10` @ `imgsz 1280`
++ dedupe duplikat (IoU>0.5) + min-conf 0.25 + cap 5. Tanpa dua-pass, conf rendah
+menghasilkan duplikat palsu (kuku 5 terlihat 6–9). CLI: `run_seg_pipeline.py`
+(default dua-pass aktif; `--no-fallback` untuk nonaktifkan).
+
 **Retrain pada dataset full-hand (T3)** — lihat `docs/PROTOKOL_FULLHAND.md`:
 - Metadata lean (`data/full_hand_template.csv`), **tanpa box** — region dari YOLO26-seg.
 - `core/train_fullhand.py` membandingkan 2 strategi & menyimpan terbaik:
